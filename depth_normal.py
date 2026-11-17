@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -12,6 +13,46 @@ try:
     import torch
 except ImportError:  # pragma: no cover - optional dependency for real models
     torch = None
+
+
+@dataclass
+class NormalMapConfig:
+    slope_scale: float = 8.0
+    model_name: Optional[str] = None
+    device: str = "cpu"
+    output_path: Optional[Path] = None
+
+    def __post_init__(self) -> None:
+        self.slope_scale = float(self.slope_scale)
+        if self.slope_scale <= 0:
+            raise ValueError("slope_scale must be positive")
+        self.device = str(self.device)
+        if self.output_path is not None:
+            self.output_path = Path(self.output_path)
+
+
+@dataclass
+class DepthNormalizer:
+    config: NormalMapConfig = field(default_factory=NormalMapConfig)
+
+    def estimate_depth_map(self, image_rgb: np.ndarray) -> np.ndarray:
+        return estimate_depth_map(image_rgb, model_name=self.config.model_name, device=self.config.device)
+
+    def normal_map_from_depth(self, depth: np.ndarray) -> np.ndarray:
+        return depth_to_normal_map(depth, slope_scale=self.config.slope_scale)
+
+    def process_image(self, image_rgb: np.ndarray) -> np.ndarray:
+        depth = self.estimate_depth_map(image_rgb)
+        return self.normal_map_from_depth(depth)
+
+    def save(self, normal_map: np.ndarray, output_path: Optional[Path] = None) -> Path:
+        path = Path(output_path) if output_path is not None else self.config.output_path
+        if path is None:
+            raise ValueError("output path is not set")
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.fromarray((normal_map * 255.0).clip(0, 255).astype(np.uint8), mode="RGB").save(path)
+        return path
 
 
 def depth_to_normal_map(depth: np.ndarray, slope_scale: float = 8.0) -> np.ndarray:
@@ -90,16 +131,18 @@ def main() -> None:
     parser.add_argument("--device", default="cpu", help="Device to run the model on, e.g. cpu or cuda.")
     args = parser.parse_args()
 
-    input_path = args.input
-    output_path = args.output
+    config = NormalMapConfig(
+        slope_scale=8.0,
+        model_name=args.model,
+        device=args.device,
+        output_path=args.output,
+    )
+    normalizer = DepthNormalizer(config)
 
-    image = Image.open(input_path).convert("RGB")
+    image = Image.open(args.input).convert("RGB")
     rgb = np.asarray(image)
-    depth = estimate_depth_map(rgb, model_name=args.model, device=args.device)
-    normal_map = depth_to_normal_map(depth)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray((normal_map * 255.0).clip(0, 255).astype(np.uint8), mode="RGB").save(output_path)
+    normal_map = normalizer.process_image(rgb)
+    output_path = normalizer.save(normal_map)
 
     print(f"Saved normal map to {output_path}")
 
