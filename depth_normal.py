@@ -18,7 +18,7 @@ except ImportError:  # pragma: no cover - optional dependency for real models
 @dataclass
 class NormalMapConfig:
     slope_scale: float = 8.0
-    model_name: Optional[str] = None
+    model_name: Optional[str] = None # depth-anything-v2 model name to prefer when available
     device: str = "cpu"
     output_path: Optional[Path] = None
 
