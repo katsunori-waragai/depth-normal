@@ -90,8 +90,8 @@ python3 depth_normal.py --demo -o output/result.png
 実行すると、`skimage.data.coffee()` のサンプル画像を対象に、以下の3つの画像が生成されます。
 
 
-<img src="figures/normal_map_input.png" width=480>
-* **`normal_map_input.png`**: 入力として使用された元のサンプル画像
+<img src="figures/coffee.png" width=480>
+* **`coffee.png`**: 入力として使用された元のサンプル画像
 
 
 <img src="figures/normal_map.png" width=480>
