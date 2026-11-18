@@ -304,10 +304,29 @@ class DepthNormalizer:
             saved_out_path = self.save(normal_map, out_path)
 
             # 4. 擬似シェーディング画像の生成と保存
-            shaded_rgb = self.apply_pseudo_shading(rgb, normals, light_dir=light_dir, strength=strength)
-            saved_shade_path = self.save(shaded_rgb, shade_save_path)
+            light_dirs: list[tuple[float, float, float]] = [
+                (-1.0, -1.0, 1.0),
+                (1.0, -1.0, 1.0),
+                (-1.0, 1.0, 1.0),
+                (1.0, 1.0, 1.0),
+            ]
 
-            return in_save_path, saved_out_path, saved_shade_path
+            saved_shade_paths = []
+            for i, light_dir in enumerate(light_dirs):
+                shaded_rgb = self.apply_pseudo_shading(
+                rgb, normals, light_dir=light_dir, strength=strength
+                )
+                shade_save_path = (
+                Path(shaded_save_path)
+                if shaded_save_path is not None
+                else out_path.with_name(f"{out_path.stem}_shaded_{i}{out_path.suffix}")
+                )
+
+                saved_shade_path = self.save(shaded_rgb, shade_save_path)
+                saved_shade_paths.append(saved_shade_path)
+
+            return in_save_path, saved_out_path, saved_shade_paths
+
     def run_demo(
         self,
         output_path: Path,
