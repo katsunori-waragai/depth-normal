@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""カラー画像から深度マップを推定し、法線マップ画像を生成するモジュール."""
+"""カラー画像から深度マップを推定し、法線マップおよび擬似シェーディング画像を生成するモジュール."""
 
 import argparse
 from dataclasses import dataclass, field
@@ -44,7 +44,7 @@ class NormalMapConfig:
 
 @dataclass
 class DepthNormalizer:
-    """カラー画像から深度推定および法線マップ変換を行うクラス.
+    """カラー画像から深度推定、法線マップ変換、擬似シェーディングを行うクラス.
 
     インスタンス初期化時に推論モデルと前処理パイプラインをロードして保持し、
     複数画像の連続処理時に再ロードを発生させません。
@@ -134,18 +134,14 @@ class DepthNormalizer:
         depth = gray.astype(np.float32) / 255.0
         return np.clip(depth, 1e-3, 1.0)
 
-    def normal_map_from_depth(self, depth: np.ndarray) -> np.ndarray:
-        """深度マップから色感度を強調した法線マップを生成する.
-
-        深度マップを高さフィールド z = f(x, y) として扱い、勾配から局所的な表面法線を計算します。
-        微小な深度変化が法線マップ上で視覚的に分かりやすい色変化として現れるよう、
-        config.slope_scale に基づく傾斜スケールを適用します。
+    def compute_normals(self, depth: np.ndarray) -> np.ndarray:
+        """深度マップから単位法線ベクトル（範囲: -1.0 〜 1.0）を計算する.
 
         Args:
             depth: 2 次元の深度マップ配列（高さ・幅ともに 2 ピクセル以上）。
 
         Returns:
-            0.0 〜 1.0 の範囲に正規化された RGB 法線マップ配列（形状: (H, W, 3), dtype: float32）。
+            正規化された 3 次元単位法線ベクトル配列（形状: (H, W, 3), dtype: float32）。
 
         Raises:
             ValueError: depth が 2 次元配列でない場合、またはサイズが 2x2 未満の場合。
@@ -162,10 +158,65 @@ class DepthNormalizer:
 
         normals = np.stack([-dz_dx, -dz_dy, np.ones_like(depth)], axis=-1)
         norms = np.linalg.norm(normals, axis=-1, keepdims=True)
-        normals = normals / np.maximum(norms, 1e-6)
-        normals = (normals + 1.0) * 0.5
-        normals = np.clip(normals, 0.0, 1.0)
-        return normals.astype(np.float32)
+        return (normals / np.maximum(norms, 1e-6)).astype(np.float32)
+
+    def normal_map_from_depth(self, depth: np.ndarray) -> np.ndarray:
+        """深度マップから色感度を強調した法線マップを生成する.
+
+        Args:
+            depth: 2 次元の深度マップ配列（高さ・幅ともに 2 ピクセル以上）。
+
+        Returns:
+            0.0 〜 1.0 の範囲に正規化された RGB 法線マップ配列（形状: (H, W, 3), dtype: float32）。
+        """
+        normals = self.compute_normals(depth)
+        normal_map = (normals + 1.0) * 0.5
+        return np.clip(normal_map, 0.0, 1.0).astype(np.float32)
+
+    def apply_pseudo_shading(
+        self,
+        image_rgb: np.ndarray,
+        normals: np.ndarray,
+        light_dir: tuple[float, float, float] = (-1.0, -1.0, 1.0),
+        strength: float = 0.6,
+    ) -> np.ndarray:
+        """法線ベクトルと光源方向の内積に基づき、元画像の HSV 輝度(V)に擬似シェーディングを適用する.
+
+        元の輝度 V に `1.0 + strength * cos(theta)` を掛けた後、
+        V の最大値が 1.0 となるようにスケーリングして RGB に変換します。
+
+        Args:
+            image_rgb: 入力となる RGB 画像配列（dtype: uint8）。
+            normals: compute_normals() で得られた単位法線ベクトル配列（範囲: -1.0 〜 1.0）。
+            light_dir: 光源の方向ベクトル (x:右, y:下, z:手前)。内部で単位ベクトルに正規化されます。
+            strength: シェーディングの強度係数。
+
+        Returns:
+            擬似シェーディング適用後の 0.0 〜 1.0 正規化 RGB 画像配列（形状: (H, W, 3), dtype: float32）。
+        """
+        light = np.asarray(light_dir, dtype=np.float32)
+        light = light / max(float(np.linalg.norm(light)), 1e-6)
+
+        # 法線ベクトルと光源方向ベクトルの内積（コサイン）
+        cos_theta = np.sum(normals * light, axis=-1)
+
+        # 1 + 係数 * cos()
+        shading_factor = np.maximum(1.0 + strength * cos_theta, 0.0)
+
+        # RGB(0.0~1.0) -> HSV(H: 0~360, S: 0.0~1.0, V: 0.0~1.0)
+        rgb_float = image_rgb[:, :, :3].astype(np.float32) / 255.0
+        hsv = cv2.cvtColor(rgb_float, cv2.COLOR_RGB2HSV)
+
+        # 輝度 V に係数を掛け、最大値が 1.0 になるように正規化
+        v_shaded = hsv[:, :, 2] * shading_factor
+        max_v = float(np.max(v_shaded))
+        if max_v > 1e-6:
+            v_shaded = v_shaded / max_v
+        hsv[:, :, 2] = np.clip(v_shaded, 0.0, 1.0)
+
+        # HSV -> RGB(0.0~1.0) に戻す
+        shaded_rgb = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+        return np.clip(shaded_rgb, 0.0, 1.0).astype(np.float32)
 
     def process_image(self, image_rgb: np.ndarray) -> np.ndarray:
         """カラー画像から深度推定と法線マップ変換を一貫して実行する.
@@ -179,13 +230,13 @@ class DepthNormalizer:
         depth = self.estimate_depth_map(image_rgb)
         return self.normal_map_from_depth(depth)
 
-    def save(self, normal_map: np.ndarray, output_path: Path) -> Path:
-        """法線マップ配列を画像ファイルとして保存する.
+    def save(self, image_float: np.ndarray, output_path: Path) -> Path:
+        """0.0 〜 1.0 の RGB 画像配列を画像ファイルとして保存する.
 
         親ディレクトリが存在しない場合は自動的に作成します。
 
         Args:
-            normal_map: 0.0 〜 1.0 に正規化された法線マップ配列。
+            image_float: 0.0 〜 1.0 に正規化された RGB 画像配列。
             output_path: 保存先のファイルパス。
 
         Returns:
@@ -193,7 +244,7 @@ class DepthNormalizer:
         """
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        Image.fromarray((normal_map * 255.0).clip(0, 255).astype(np.uint8), mode="RGB").save(path)
+        Image.fromarray((image_float * 255.0).clip(0, 255).astype(np.uint8), mode="RGB").save(path)
         return path
 
     def run_file(self, input_path: Path, output_path: Path) -> Path:
@@ -211,16 +262,27 @@ class DepthNormalizer:
         normal_map = self.process_image(rgb)
         return self.save(normal_map, output_path)
 
-    def run_demo(self, output_path: Path, input_save_path: Optional[Path] = None) -> tuple[Path, Path]:
-        """scikit-image のサンプル画像（coffee）を処理し、元画像と法線マップを保存する.
+    def run_demo(
+        self,
+        output_path: Path,
+        input_save_path: Optional[Path] = None,
+        shaded_save_path: Optional[Path] = None,
+        light_dir: tuple[float, float, float] = (-1.0, -1.0, 1.0),
+        strength: float = 3.0,
+    ) -> tuple[Path, Path, Path]:
+        """scikit-image のサンプル画像（coffee）を処理し、元画像・法線マップ・擬似シェーディング画像を保存する.
 
         Args:
             output_path: 出力する法線マップ画像のファイルパス。
             input_save_path: 元となるコーヒー画像の保存先パス。省略時は output_path の
                 ファイル名末尾に "_input" を付与したパスを使用します。
+            shaded_save_path: 擬似シェーディング画像の保存先パス。省略時は output_path の
+                ファイル名末尾に "_shaded" を付与したパスを使用します。
+            light_dir: 擬似シェーディングに使用する光源の方向ベクトル。
+            strength: 擬似シェーディングの強度係数。
 
         Returns:
-            (保存された元画像の Path, 保存された法線マップ画像の Path) のタプル。
+            (保存された元画像の Path, 保存された法線マップの Path, 保存されたシェーディング画像の Path) のタプル。
 
         Raises:
             ImportError: scikit-image がインストールされていない場合。
@@ -228,7 +290,9 @@ class DepthNormalizer:
         try:
             from skimage import data
         except ImportError as exc:
-            raise ImportError("scikit-image is required for --demo mode. Install it via `pip install scikit-image`.") from exc
+            raise ImportError(
+                "scikit-image is required for --demo mode. Install it via `pip install scikit-image`."
+            ) from exc
 
         rgb = np.asarray(data.coffee(), dtype=np.uint8)
         out_path = Path(output_path)
@@ -237,23 +301,47 @@ class DepthNormalizer:
             if input_save_path is not None
             else out_path.with_name(f"{out_path.stem}_input{out_path.suffix}")
         )
+        shade_save_path = (
+            Path(shaded_save_path)
+            if shaded_save_path is not None
+            else out_path.with_name(f"{out_path.stem}_shaded{out_path.suffix}")
+        )
 
+        # 1. 元画像の保存
         in_save_path.parent.mkdir(parents=True, exist_ok=True)
         Image.fromarray(rgb, mode="RGB").save(in_save_path)
 
-        normal_map = self.process_image(rgb)
+        # 2. 深度推定と単位法線ベクトルの計算
+        depth = self.estimate_depth_map(rgb)
+        normals = self.compute_normals(depth)
+
+        # 3. 法線マップの生成と保存
+        normal_map = np.clip((normals + 1.0) * 0.5, 0.0, 1.0).astype(np.float32)
         saved_out_path = self.save(normal_map, out_path)
-        return in_save_path, saved_out_path
+
+        # 4. 擬似シェーディング画像の生成と保存
+        shaded_rgb = self.apply_pseudo_shading(rgb, normals, light_dir=light_dir, strength=strength)
+        saved_shade_path = self.save(shaded_rgb, shade_save_path)
+
+        return in_save_path, saved_out_path, saved_shade_path
 
 
 def main() -> None:
     """コマンドライン引数を解析し、法線マップ生成処理を実行するエントリーポイント."""
     parser = argparse.ArgumentParser(description="Estimate a depth map and visualize it as a normal-map image.")
-    parser.add_argument("input", type=Path, nargs="?", default=None, help="Input image path (optional when --demo is used).")
+    parser.add_argument(
+        "input", type=Path, nargs="?", default=None, help="Input image path (optional when --demo is used)."
+    )
     parser.add_argument("-o", "--output", type=Path, default=Path("normal_map.png"), help="Output PNG path.")
-    parser.add_argument("--model", type=str, default=None, help="Optional DepthAnything model name to prefer when available.")
+    parser.add_argument(
+        "--model", type=str, default=None, help="Optional DepthAnything model name to prefer when available."
+    )
     parser.add_argument("--device", default="cpu", help="Device to run the model on, e.g. cpu or cuda.")
-    parser.add_argument("--demo", action="store_true", help="Run demo using skimage.data.coffee() and save both input and output.")
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="Run demo using skimage.data.coffee() and save input, normal map, and shaded images.",
+    )
     args = parser.parse_args()
 
     if not args.demo and args.input is None:
@@ -267,9 +355,10 @@ def main() -> None:
     normalizer = DepthNormalizer(config)
 
     if args.demo:
-        input_saved, output_saved = normalizer.run_demo(args.output)
+        input_saved, output_saved, shaded_saved = normalizer.run_demo(args.output)
         print(f"Saved demo input image to {input_saved}")
         print(f"Saved demo normal map to {output_saved}")
+        print(f"Saved demo shaded image to {shaded_saved}")
     else:
         output_path = normalizer.run_file(args.input, args.output)
         print(f"Saved normal map to {output_path}")
