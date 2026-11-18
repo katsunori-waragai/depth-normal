@@ -1,7 +1,5 @@
-#!/usr/bin/env python3
 """カラー画像から深度マップを推定し、法線マップおよび擬似シェーディング画像を生成するモジュール."""
 
-import argparse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -249,103 +247,106 @@ class DepthNormalizer:
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         Image.fromarray(
-            (image_float * 255.0).clip(0, 255).astype(np.uint8), mode="RGB"
+            (image_float * 255.0).clip(0, 255).astype(np.uint8)
         ).save(path)
         return path
 
-    def run_file(self, input_path: Path, output_path: Path) -> Path:
-        """画像ファイルを読み込み、法線マップを生成してファイルに保存する.
+    def run_file(
+            self,
+            input_path: Path,
+            output_path: Path,
+            input_save_path: Optional[Path] = None,
+            shaded_save_path: Optional[Path] = None,
+            light_dir: tuple[float, float, float] = (-1.0, -1.0, 1.0),
+            strength: float = 5.0,
+        ) -> tuple[Path, Path, Path]:
+            """画像ファイルを読み込み、元画像コピー・法線マップ・擬似シェーディング画像を保存する.
 
-        Args:
-            input_path: 入力画像のファイルパス。
-            output_path: 出力する法線マップ画像のファイルパス。
+            Args:
+                input_path: 入力画像のファイルパス。
+                output_path: 出力する法線マップ画像のファイルパス。
+                input_save_path: 元画像の保存先パス。省略時は output_path の末尾に "_input" を付与します。
+                shaded_save_path: 擬似シェーディング画像の保存先パス。省略時は "_shaded" を付与します。
+                light_dir: 擬似シェーディングに使用する光源の方向ベクトル。
+                strength: 擬似シェーディングの強度係数。
 
-        Returns:
-            保存されたファイルの Path オブジェクト。
-        """
-        image = Image.open(input_path).convert("RGB")
-        rgb = np.asarray(image)
-        normal_map = self.process_image(rgb)
-        return self.save(normal_map, output_path)
+            Returns:
+                (保存された元画像の Path, 保存された法線マップの Path, 保存されたシェーディング画像の Path) のタプル。
+            """
+            in_path = Path(input_path)
+            out_path = Path(output_path)
+
+            in_save_path = (
+                Path(input_save_path)
+                if input_save_path is not None
+                else out_path.with_name(f"{out_path.stem}_input{out_path.suffix}")
+            )
+            shade_save_path = (
+                Path(shaded_save_path)
+                if shaded_save_path is not None
+                else out_path.with_name(f"{out_path.stem}_shaded{out_path.suffix}")
+            )
+
+            # 1. 入力画像の読み込みと保存
+            image = Image.open(in_path).convert("RGB")
+            rgb = np.asarray(image, dtype=np.uint8)
+            in_save_path.parent.mkdir(parents=True, exist_ok=True)
+            image.save(in_save_path)
+
+            # 2. 深度推定と単位法線ベクトルの計算
+            depth = self.estimate_depth_map(rgb)
+            normals = self.compute_normals(depth)
+
+            # 3. 法線マップの生成と保存
+            normal_map = np.clip((normals + 1.0) * 0.5, 0.0, 1.0).astype(np.float32)
+            saved_out_path = self.save(normal_map, out_path)
+
+            # 4. 擬似シェーディング画像の生成と保存
+            light_dirs: list[tuple[float, float, float]] = [
+                (-1.0, -1.0, 1.0),
+                (1.0, -1.0, 1.0),
+                (-1.0, 1.0, 1.0),
+                (1.0, 1.0, 1.0),
+            ]
+
+            saved_shade_paths = []
+            for i, light_dir in enumerate(light_dirs):
+                shaded_rgb = self.apply_pseudo_shading(
+                rgb, normals, light_dir=light_dir, strength=strength
+                )
+                shade_save_path = (
+                Path(shaded_save_path)
+                if shaded_save_path is not None
+                else out_path.with_name(f"{out_path.stem}_shaded_{i}{out_path.suffix}")
+                )
+
+                saved_shade_path = self.save(shaded_rgb, shade_save_path)
+                saved_shade_paths.append(saved_shade_path)
+
+            return in_save_path, saved_out_path, saved_shade_paths
 
     def run_demo(
         self,
         output_path: Path,
         input_save_path: Optional[Path] = None,
         shaded_save_path: Optional[Path] = None,
+        light_dir: tuple[float, float, float] = (-1.0, -1.0, 1.0),
         strength: float = 5.0,
-    ) -> tuple[Path, Path, Path]:
-        """scikit-image のサンプル画像（coffee）を処理し、元画像・法線マップ・擬似シェーディング画像を保存する.
-
-        Args:
-            output_path: 出力する法線マップ画像のファイルパス。
-            input_save_path: 元となるコーヒー画像の保存先パス。省略時は output_path の
-                ファイル名末尾に "_input" を付与したパスを使用します。
-            shaded_save_path: 擬似シェーディング画像の保存先パス。省略時は output_path の
-                ファイル名末尾に "_shaded" を付与したパスを使用します。
-            light_dir: 擬似シェーディングに使用する光源の方向ベクトル。
-            strength: 擬似シェーディングの強度係数。
-
-        Returns:
-            (保存された元画像の Path, 保存された法線マップの Path, 保存されたシェーディング画像の Path) のタプル。
-
-        Raises:
-            ImportError: scikit-image がインストールされていない場合。
-        """
-        try:
-            from skimage import data
-        except ImportError as exc:
-            raise ImportError(
-                "scikit-image is required for --demo mode. Install it via `pip install scikit-image`."
-            ) from exc
-
-        rgb = np.asarray(data.coffee(), dtype=np.uint8)
-        out_path = Path(output_path)
-        in_save_path = (
-            Path(input_save_path)
-            if input_save_path is not None
-            else out_path.with_name(f"{out_path.stem}_input{out_path.suffix}")
+        ) -> tuple[Path, Path, Path]:
+        """デフォルトのサンプル画像（figures/coffee.png）を使用して標準パイプラインを実行する."""
+        demo_input = Path("figures/coffee.png")
+        return self.run_file(
+            input_path=demo_input,
+            output_path=output_path,
+            input_save_path=input_save_path,
+            shaded_save_path=shaded_save_path,
+            light_dir=light_dir,
+            strength=strength,
         )
-
-        # 1. 元画像の保存
-        in_save_path.parent.mkdir(parents=True, exist_ok=True)
-        Image.fromarray(rgb, mode="RGB").save(in_save_path)
-
-        # 2. 深度推定と単位法線ベクトルの計算
-        depth = self.estimate_depth_map(rgb)
-        normals = self.compute_normals(depth)
-
-        # 3. 法線マップの生成と保存
-        normal_map = np.clip((normals + 1.0) * 0.5, 0.0, 1.0).astype(np.float32)
-        saved_out_path = self.save(normal_map, out_path)
-
-        # 4. 擬似シェーディング画像の生成と保存
-        light_dirs: list[tuple[float, float, float]] = [
-            (-1.0, -1.0, 1.0),
-            (1.0, -1.0, 1.0),
-            (-1.0, 1.0, 1.0),
-            (1.0, 1.0, 1.0),
-        ]
-
-        saved_shade_paths = []
-        for i, light_dir in enumerate(light_dirs):
-            shaded_rgb = self.apply_pseudo_shading(
-                rgb, normals, light_dir=light_dir, strength=strength
-            )
-            shade_save_path = (
-                Path(shaded_save_path)
-                if shaded_save_path is not None
-                else out_path.with_name(f"{out_path.stem}_shaded_{i}{out_path.suffix}")
-            )
-
-            saved_shade_path = self.save(shaded_rgb, shade_save_path)
-            saved_shade_paths.append(saved_shade_path)
-
-        return in_save_path, saved_out_path, saved_shade_paths
-
 
 def main() -> None:
     """コマンドライン引数を解析し、法線マップ生成処理を実行するエントリーポイント."""
+    import argparse
     parser = argparse.ArgumentParser(
         description="Estimate a depth map and visualize it as a normal-map image."
     )
@@ -375,7 +376,7 @@ def main() -> None:
     parser.add_argument(
         "--demo",
         action="store_true",
-        help="Run demo using skimage.data.coffee() and save input, normal map, and shaded images.",
+        help="Run demo using coffee image and save input, normal map, and shaded images.",
     )
     args = parser.parse_args()
 
