@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
+"""カラー画像から深度マップを推定し、法線マップ画像を生成するモジュール."""
 
 import argparse
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import cv2
 import numpy as np
@@ -17,134 +18,261 @@ except ImportError:  # pragma: no cover - optional dependency for real models
 
 @dataclass
 class NormalMapConfig:
+    """法線マップ生成のパラメータおよび実行環境を保持する設定クラス.
+
+    Attributes:
+        slope_scale: 深度の勾配に対する傾斜スケール（法線の凹凸の強さ）。正の値である必要があります。
+        model_name: 利用可能な場合に優先して使用する Depth-Anything-V2 のモデル名。
+        device: 推論を実行するデバイス名（例: "cpu", "cuda"）。
+    """
+
     slope_scale: float = 8.0
-    model_name: Optional[str] = None # depth-anything-v2 model name to prefer when available
+    model_name: Optional[str] = None
     device: str = "cpu"
-    output_path: Optional[Path] = None
 
     def __post_init__(self) -> None:
+        """初期化後にフィールドの型変換とバリデーションを実行する.
+
+        Raises:
+            ValueError: slope_scale が 0 以下の場合。
+        """
         self.slope_scale = float(self.slope_scale)
         if self.slope_scale <= 0:
             raise ValueError("slope_scale must be positive")
         self.device = str(self.device)
-        if self.output_path is not None:
-            self.output_path = Path(self.output_path)
 
 
 @dataclass
 class DepthNormalizer:
+    """カラー画像から深度推定および法線マップ変換を行うクラス.
+
+    インスタンス初期化時に推論モデルと前処理パイプラインをロードして保持し、
+    複数画像の連続処理時に再ロードを発生させません。
+
+    Attributes:
+        config: 法線マップ生成に使用する設定オブジェクト。
+    """
+
     config: NormalMapConfig = field(default_factory=NormalMapConfig)
+    _model: Any = field(default=None, init=False, repr=False)
+    _transform: Any = field(default=None, init=False, repr=False)
+    _prepare_for_net: Any = field(default=None, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """初期化後に推論モデルと前処理パイプラインをロードする.
+
+        ライブラリが未インストールの場合やロードに失敗した場合は、
+        内部状態を None のまま維持し、推論時にグレースケールフォールバックを使用します。
+        """
+        try:
+            if torch is None:
+                raise RuntimeError("PyTorch is not installed")
+
+            from depth_anything_v2.dpt import DepthAnythingV2
+            from depth_anything_v2.util.transform import NormalizeImage, PrepareForNet
+
+            self._transform = NormalizeImage(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            self._prepare_for_net = PrepareForNet()
+
+            model = DepthAnythingV2(device=self.config.device)
+            if hasattr(model, "eval"):
+                model.eval()
+            self._model = model
+        except Exception:
+            self._model = None
+            self._transform = None
+            self._prepare_for_net = None
 
     def estimate_depth_map(self, image_rgb: np.ndarray) -> np.ndarray:
-        return estimate_depth_map(image_rgb, model_name=self.config.model_name, device=self.config.device)
+        """カラー画像から深度マップを推定する.
+
+        保持している Depth-Anything-V2 モデルを使用して推論を行います。
+        モデルがロードされていない場合はグレースケールベースのフォールバックを使用します。
+
+        Args:
+            image_rgb: 入力となる RGB または RGBA の画像配列（形状: (H, W, 3) または (H, W, 4)）。
+
+        Returns:
+            0.0 〜 1.0 の範囲に正規化された 2 次元の深度マップ（dtype: float32）。
+
+        Raises:
+            ValueError: 入力画像が 3 次元配列でない場合、またはチャンネル数が 3・4 以外の場合。
+        """
+        if image_rgb.ndim != 3 or image_rgb.shape[2] not in (3, 4):
+            raise ValueError(f"expected an RGB(A) image, got shape {image_rgb.shape}")
+
+        if self._model is None:
+            return self._estimate_depth_fallback(image_rgb)
+
+        try:
+            image = Image.fromarray(cv2.cvtColor(image_rgb, cv2.COLOR_BGR2RGB))
+            image = image.convert("RGB")
+            image_tensor = self._prepare_for_net(image)
+            image_tensor = self._transform(image_tensor)
+
+            with torch.no_grad():
+                depth = self._model(image_tensor.unsqueeze(0))[0]
+            depth = depth.detach().cpu().numpy()[0]
+            depth = np.asarray(depth, dtype=np.float32)
+            # Convert depth from the model representation into a normalized height map.
+            depth = (depth - np.min(depth)) / max(np.ptp(depth), 1e-6)
+            return depth
+        except Exception:
+            return self._estimate_depth_fallback(image_rgb)
+
+    def _estimate_depth_fallback(self, image_rgb: np.ndarray) -> np.ndarray:
+        """グレースケールの輝度値を用いて簡易的な深度マップを生成する（フォールバック用）.
+
+        Args:
+            image_rgb: 入力となる RGB または RGBA の画像配列。
+
+        Returns:
+            1e-3 〜 1.0 の範囲にクリップされた 2 次元の深度マップ（dtype: float32）。
+        """
+        color_code = cv2.COLOR_RGB2GRAY if image_rgb.shape[2] == 3 else cv2.COLOR_RGBA2GRAY
+        gray = cv2.cvtColor(image_rgb, color_code)
+        depth = gray.astype(np.float32) / 255.0
+        return np.clip(depth, 1e-3, 1.0)
 
     def normal_map_from_depth(self, depth: np.ndarray) -> np.ndarray:
-        return depth_to_normal_map(depth, slope_scale=self.config.slope_scale)
+        """深度マップから色感度を強調した法線マップを生成する.
+
+        深度マップを高さフィールド z = f(x, y) として扱い、勾配から局所的な表面法線を計算します。
+        微小な深度変化が法線マップ上で視覚的に分かりやすい色変化として現れるよう、
+        config.slope_scale に基づく傾斜スケールを適用します。
+
+        Args:
+            depth: 2 次元の深度マップ配列（高さ・幅ともに 2 ピクセル以上）。
+
+        Returns:
+            0.0 〜 1.0 の範囲に正規化された RGB 法線マップ配列（形状: (H, W, 3), dtype: float32）。
+
+        Raises:
+            ValueError: depth が 2 次元配列でない場合、またはサイズが 2x2 未満の場合。
+        """
+        depth = np.asarray(depth, dtype=np.float32)
+        if depth.ndim != 2:
+            raise ValueError(f"depth must be a 2D array, got shape {depth.shape}")
+        if depth.shape[0] < 2 or depth.shape[1] < 2:
+            raise ValueError("depth must be at least 2x2")
+
+        dz_dy, dz_dx = np.gradient(depth)
+        dz_dy *= self.config.slope_scale
+        dz_dx *= self.config.slope_scale
+
+        normals = np.stack([-dz_dx, -dz_dy, np.ones_like(depth)], axis=-1)
+        norms = np.linalg.norm(normals, axis=-1, keepdims=True)
+        normals = normals / np.maximum(norms, 1e-6)
+        normals = (normals + 1.0) * 0.5
+        normals = np.clip(normals, 0.0, 1.0)
+        return normals.astype(np.float32)
 
     def process_image(self, image_rgb: np.ndarray) -> np.ndarray:
+        """カラー画像から深度推定と法線マップ変換を一貫して実行する.
+
+        Args:
+            image_rgb: 入力となる RGB または RGBA の画像配列。
+
+        Returns:
+            0.0 〜 1.0 の範囲に正規化された RGB 法線マップ配列（dtype: float32）。
+        """
         depth = self.estimate_depth_map(image_rgb)
         return self.normal_map_from_depth(depth)
 
-    def save(self, normal_map: np.ndarray, output_path: Optional[Path] = None) -> Path:
-        path = Path(output_path) if output_path is not None else self.config.output_path
-        if path is None:
-            raise ValueError("output path is not set")
+    def save(self, normal_map: np.ndarray, output_path: Path) -> Path:
+        """法線マップ配列を画像ファイルとして保存する.
 
+        親ディレクトリが存在しない場合は自動的に作成します。
+
+        Args:
+            normal_map: 0.0 〜 1.0 に正規化された法線マップ配列。
+            output_path: 保存先のファイルパス。
+
+        Returns:
+            保存されたファイルの Path オブジェクト。
+        """
+        path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         Image.fromarray((normal_map * 255.0).clip(0, 255).astype(np.uint8), mode="RGB").save(path)
         return path
 
+    def run_file(self, input_path: Path, output_path: Path) -> Path:
+        """画像ファイルを読み込み、法線マップを生成してファイルに保存する.
 
-def depth_to_normal_map(depth: np.ndarray, slope_scale: float = 8.0) -> np.ndarray:
-    """Convert a depth map to a normal map with enhanced color sensitivity.
+        Args:
+            input_path: 入力画像のファイルパス。
+            output_path: 出力する法線マップ画像のファイルパス。
 
-    The depth-map is treated as a height field z = f(x, y), and the local
-    surface normal is computed from the gradient of that field. A moderate
-    slope scale is applied so minor depth variations lead to clearly visible
-    color changes in the normal map.
-    """
-    depth = np.asarray(depth, dtype=np.float32)
-    if depth.ndim != 2:
-        raise ValueError(f"depth must be a 2D array, got shape {depth.shape}")
-    if depth.shape[0] < 2 or depth.shape[1] < 2:
-        raise ValueError("depth must be at least 2x2")
+        Returns:
+            保存されたファイルの Path オブジェクト。
+        """
+        image = Image.open(input_path).convert("RGB")
+        rgb = np.asarray(image)
+        normal_map = self.process_image(rgb)
+        return self.save(normal_map, output_path)
 
-    slope_scale = float(slope_scale)
-    if slope_scale <= 0:
-        raise ValueError("slope_scale must be positive")
+    def run_demo(self, output_path: Path, input_save_path: Optional[Path] = None) -> tuple[Path, Path]:
+        """scikit-image のサンプル画像（coffee）を処理し、元画像と法線マップを保存する.
 
-    dz_dy, dz_dx = np.gradient(depth)
-    dz_dy *= slope_scale
-    dz_dx *= slope_scale
+        Args:
+            output_path: 出力する法線マップ画像のファイルパス。
+            input_save_path: 元となるコーヒー画像の保存先パス。省略時は output_path の
+                ファイル名末尾に "_input" を付与したパスを使用します。
 
-    normals = np.stack([-dz_dx, -dz_dy, np.ones_like(depth)], axis=-1)
-    norms = np.linalg.norm(normals, axis=-1, keepdims=True)
-    normals = normals / np.maximum(norms, 1e-6)
-    normals = (normals + 1.0) * 0.5
-    normals = np.clip(normals, 0.0, 1.0)
-    return normals.astype(np.float32)
+        Returns:
+            (保存された元画像の Path, 保存された法線マップ画像の Path) のタプル。
 
+        Raises:
+            ImportError: scikit-image がインストールされていない場合。
+        """
+        try:
+            from skimage import data
+        except ImportError as exc:
+            raise ImportError("scikit-image is required for --demo mode. Install it via `pip install scikit-image`.") from exc
 
-def estimate_depth_map(image_rgb: np.ndarray, model_name: Optional[str] = None, device: str = "cpu") -> np.ndarray:
-    """Estimate a depth map from a color image.
+        rgb = np.asarray(data.coffee(), dtype=np.uint8)
+        out_path = Path(output_path)
+        in_save_path = (
+            Path(input_save_path)
+            if input_save_path is not None
+            else out_path.with_name(f"{out_path.stem}_input{out_path.suffix}")
+        )
 
-    If Depth-Anything-V2 is installed, the script tries to use it. Otherwise a
-    grayscale-based fallback is used so the pipeline still runs in CPU-only
-    environments.
-    """
-    if image_rgb.ndim != 3 or image_rgb.shape[2] not in (3, 4):
-        raise ValueError(f"expected an RGB(A) image, got shape {image_rgb.shape}")
+        in_save_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.fromarray(rgb, mode="RGB").save(in_save_path)
 
-    try:
-        if torch is None:
-            raise RuntimeError("PyTorch is not installed")
-
-        from depth_anything_v2.dpt import DepthAnythingV2
-        from depth_anything_v2.util.transform import NormalizeImage, PrepareForNet
-
-        image = Image.fromarray(cv2.cvtColor(image_rgb, cv2.COLOR_BGR2RGB))
-        image = image.convert("RGB")
-        transform = NormalizeImage(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        image_tensor = PrepareForNet()(image)
-        image_tensor = transform(image_tensor)
-
-        model = DepthAnythingV2(device=device)
-        with torch.no_grad():
-            depth = model(image_tensor.unsqueeze(0))[0]
-        depth = depth.detach().cpu().numpy()[0]
-        depth = np.asarray(depth, dtype=np.float32)
-        # Convert depth from the model representation into a normalized height map.
-        depth = (depth - np.min(depth)) / max(np.ptp(depth), 1e-6)
-        return depth
-    except Exception:
-        gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY if image_rgb.shape[2] == 3 else cv2.COLOR_RGBA2GRAY)
-        depth = gray.astype(np.float32) / 255.0
-        depth = np.clip(depth, 1e-3, 1.0)
-        return depth
+        normal_map = self.process_image(rgb)
+        saved_out_path = self.save(normal_map, out_path)
+        return in_save_path, saved_out_path
 
 
 def main() -> None:
+    """コマンドライン引数を解析し、法線マップ生成処理を実行するエントリーポイント."""
     parser = argparse.ArgumentParser(description="Estimate a depth map and visualize it as a normal-map image.")
-    parser.add_argument("input", type=Path, help="Input image path.")
+    parser.add_argument("input", type=Path, nargs="?", default=None, help="Input image path (optional when --demo is used).")
     parser.add_argument("-o", "--output", type=Path, default=Path("normal_map.png"), help="Output PNG path.")
     parser.add_argument("--model", type=str, default=None, help="Optional DepthAnything model name to prefer when available.")
     parser.add_argument("--device", default="cpu", help="Device to run the model on, e.g. cpu or cuda.")
+    parser.add_argument("--demo", action="store_true", help="Run demo using skimage.data.coffee() and save both input and output.")
     args = parser.parse_args()
+
+    if not args.demo and args.input is None:
+        parser.error("the following arguments are required: input (unless --demo is specified)")
 
     config = NormalMapConfig(
         slope_scale=8.0,
         model_name=args.model,
         device=args.device,
-        output_path=args.output,
     )
     normalizer = DepthNormalizer(config)
 
-    image = Image.open(args.input).convert("RGB")
-    rgb = np.asarray(image)
-    normal_map = normalizer.process_image(rgb)
-    output_path = normalizer.save(normal_map)
-
-    print(f"Saved normal map to {output_path}")
+    if args.demo:
+        input_saved, output_saved = normalizer.run_demo(args.output)
+        print(f"Saved demo input image to {input_saved}")
+        print(f"Saved demo normal map to {output_saved}")
+    else:
+        output_path = normalizer.run_file(args.input, args.output)
+        print(f"Saved normal map to {output_path}")
 
 
 if __name__ == "__main__":
