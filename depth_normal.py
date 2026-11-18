@@ -1,7 +1,5 @@
-#!/usr/bin/env python3
 """カラー画像から深度マップを推定し、法線マップおよび擬似シェーディング画像を生成するモジュール."""
 
-import argparse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -348,6 +346,7 @@ class DepthNormalizer:
 
 def main() -> None:
     """コマンドライン引数を解析し、法線マップ生成処理を実行するエントリーポイント."""
+    import argparse
     parser = argparse.ArgumentParser(
         description="Estimate a depth map and visualize it as a normal-map image."
     )
