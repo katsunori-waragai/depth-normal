@@ -50,3 +50,55 @@ python3 depth_normal.py input.jpg -o normal_map.png
 4. 法線ベクトルを RGB 値に写像して画像として出力する
 
 Depth-Anything-V2 がインストール済みの場合は、その推論を優先して利用します。未インストールの環境では、CPU でも動くフォールバック処理で深度マップを生成します。
+
+### 疑似シェーディングの実装
+
+``` 
+python3 depth_normal.py --demo
+```
+
+### 擬似シェーディングの実装（デモモード）
+
+推定した深度マップから算出した単位法線ベクトルを利用し、元画像に対して仮想光源による陰影（擬似シェーディング）を付与するデモ機能です。
+
+#### 実行方法
+
+```bash
+python3 depth_normal.py --demo
+```
+
+出力先のファイル名を指定する場合は `-o` オプションを使用します（デフォルトは `normal_map.png`）。
+
+```bash
+python3 depth_normal.py --demo -o output/result.png
+```
+
+※ `--demo` モードの実行には `scikit-image` が必要です（`pip install scikit-image`）。
+
+#### 出力されるファイル
+
+実行すると、`skimage.data.coffee()` のサンプル画像を対象に、以下の3つの画像が生成されます。
+
+
+<img src="figures/normal_map_input.png" width=320>
+* **`normal_map_input.png`**: 入力として使用された元のサンプル画像
+
+
+<img src="figures/normal_map.png" width=320>
+* **`normal_map.png`**: 深度勾配から生成された法線マップ画像
+
+<img src="figures/normal_map_shaded_0.png" width=320>
+<img src="figures/normal_map_shaded_1.png" width=320>
+
+<img src="figures/normal_map_shaded_2.png" width=320>
+
+<img src="figures/normal_map_shaded_3.png" width=320>
+
+* **`normal_map_shaded.png`**: 法線ベクトルと仮想光源に基づき擬似シェーディングを適用した画像
+
+#### 処理の仕組み
+
+1. **コサイン（内積）の計算**: 各ピクセルの単位法線ベクトル $\mathbf{N}$ と、想定する平行光源の方向ベクトル $\mathbf{L}$（デフォルトは左上・手前方向 `(-1.0, -1.0, 1.0)`）の内積 $\cos\theta = \mathbf{N} \cdot \mathbf{L}$ を算出します。
+2. **輝度（V）の変調**: 元画像を HSV 色空間に変換し、色相（H）と彩度（S）を維持したまま、明度（V）に対して以下の係数を掛け合わせます。
+   $$V_{\text{shaded}} = V \times (1.0 + \text{strength} \times \cos\theta)$$
+3. **正規化と RGB 復元**: 画像全体の明度の最大値が `1.0` となるようにスケーリングを行った後、RGB 色空間へ戻して保存します。
