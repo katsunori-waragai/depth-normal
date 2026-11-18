@@ -267,7 +267,7 @@ class DepthNormalizer:
         output_path: Path,
         input_save_path: Optional[Path] = None,
         shaded_save_path: Optional[Path] = None,
-        strength: float = 3.0,
+        strength: float = 5.0,
     ) -> tuple[Path, Path, Path]:
         """scikit-image のサンプル画像（coffee）を処理し、元画像・法線マップ・擬似シェーディング画像を保存する.
 
@@ -301,7 +301,6 @@ class DepthNormalizer:
             else out_path.with_name(f"{out_path.stem}_input{out_path.suffix}")
         )
 
-        light_dir: tuple[float, float, float] = (-1.0, -1.0, 1.0),
 
 
         # 1. 元画像の保存
@@ -317,16 +316,24 @@ class DepthNormalizer:
         saved_out_path = self.save(normal_map, out_path)
 
         # 4. 擬似シェーディング画像の生成と保存
-        shaded_rgb = self.apply_pseudo_shading(rgb, normals, light_dir=light_dir, strength=strength)
-        shade_save_path = (
-            Path(shaded_save_path)
-            if shaded_save_path is not None
-            else out_path.with_name(f"{out_path.stem}_shaded{out_path.suffix}")
-        )
+        light_dirs: list[tuple[float, float, float]] = [(-1.0, -1.0, 1.0),
+                                                        (1.0, -1.0, 1.0),
+                                                        (-1.0, 1.0, 1.0),
+                                                        (1.0, 1.0, 1.0)]
+        
+        saved_shade_paths=[]    
+        for i, light_dir in enumerate(light_dirs):
+            shaded_rgb = self.apply_pseudo_shading(rgb, normals, light_dir=light_dir, strength=strength)
+            shade_save_path = (
+                Path(shaded_save_path)
+                if shaded_save_path is not None
+                else out_path.with_name(f"{out_path.stem}_shaded_{i}{out_path.suffix}")
+            )
 
-        saved_shade_path = self.save(shaded_rgb, shade_save_path)
+            saved_shade_path = self.save(shaded_rgb, shade_save_path)
+            saved_shade_paths.append(saved_shade_path)
 
-        return in_save_path, saved_out_path, saved_shade_path
+        return in_save_path, saved_out_path, saved_shade_paths
 
 
 def main() -> None:
