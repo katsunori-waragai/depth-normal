@@ -267,7 +267,6 @@ class DepthNormalizer:
         output_path: Path,
         input_save_path: Optional[Path] = None,
         shaded_save_path: Optional[Path] = None,
-        light_dir: tuple[float, float, float] = (-1.0, -1.0, 1.0),
         strength: float = 3.0,
     ) -> tuple[Path, Path, Path]:
         """scikit-image のサンプル画像（coffee）を処理し、元画像・法線マップ・擬似シェーディング画像を保存する.
@@ -301,11 +300,9 @@ class DepthNormalizer:
             if input_save_path is not None
             else out_path.with_name(f"{out_path.stem}_input{out_path.suffix}")
         )
-        shade_save_path = (
-            Path(shaded_save_path)
-            if shaded_save_path is not None
-            else out_path.with_name(f"{out_path.stem}_shaded{out_path.suffix}")
-        )
+
+        light_dir: tuple[float, float, float] = (-1.0, -1.0, 1.0),
+
 
         # 1. 元画像の保存
         in_save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -321,6 +318,12 @@ class DepthNormalizer:
 
         # 4. 擬似シェーディング画像の生成と保存
         shaded_rgb = self.apply_pseudo_shading(rgb, normals, light_dir=light_dir, strength=strength)
+        shade_save_path = (
+            Path(shaded_save_path)
+            if shaded_save_path is not None
+            else out_path.with_name(f"{out_path.stem}_shaded{out_path.suffix}")
+        )
+
         saved_shade_path = self.save(shaded_rgb, shade_save_path)
 
         return in_save_path, saved_out_path, saved_shade_path
