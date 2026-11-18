@@ -80,21 +80,28 @@ python3 depth_normal.py --demo -o output/result.png
 実行すると、`skimage.data.coffee()` のサンプル画像を対象に、以下の3つの画像が生成されます。
 
 
-<img src="figures/normal_map_input.png" width=320>
+<img src="figures/normal_map_input.png" width=480>
 * **`normal_map_input.png`**: 入力として使用された元のサンプル画像
 
 
-<img src="figures/normal_map.png" width=320>
+<img src="figures/normal_map.png" width=480>
 * **`normal_map.png`**: 深度勾配から生成された法線マップ画像
 
-<img src="figures/normal_map_shaded_0.png" width=320>
-<img src="figures/normal_map_shaded_1.png" width=320>
+<img src="figures/normal_map_shaded_0.png" width=480>
+<img src="figures/normal_map_shaded_1.png" width=480>
 
-<img src="figures/normal_map_shaded_2.png" width=320>
+<img src="figures/normal_map_shaded_2.png" width=480>
 
-<img src="figures/normal_map_shaded_3.png" width=320>
+<img src="figures/normal_map_shaded_3.png" width=480>
 
 * **`normal_map_shaded.png`**: 法線ベクトルと仮想光源に基づき擬似シェーディングを適用した画像
+
+
+効果：
+異なるシェーディングの画像を見比べてください。
+- コーヒーカップの縁
+- テーブルの木目の様子
+それらが微妙に違ってきているはずです。
 
 #### 処理の仕組み
 
