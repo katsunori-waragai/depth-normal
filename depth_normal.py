@@ -71,7 +71,9 @@ class DepthNormalizer:
             from depth_anything_v2.dpt import DepthAnythingV2
             from depth_anything_v2.util.transform import NormalizeImage, PrepareForNet
 
-            self._transform = NormalizeImage(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            self._transform = NormalizeImage(
+                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+            )
             self._prepare_for_net = PrepareForNet()
 
             model = DepthAnythingV2(device=self.config.device)
@@ -129,7 +131,9 @@ class DepthNormalizer:
         Returns:
             1e-3 〜 1.0 の範囲にクリップされた 2 次元の深度マップ（dtype: float32）。
         """
-        color_code = cv2.COLOR_RGB2GRAY if image_rgb.shape[2] == 3 else cv2.COLOR_RGBA2GRAY
+        color_code = (
+            cv2.COLOR_RGB2GRAY if image_rgb.shape[2] == 3 else cv2.COLOR_RGBA2GRAY
+        )
         gray = cv2.cvtColor(image_rgb, color_code)
         depth = gray.astype(np.float32) / 255.0
         return np.clip(depth, 1e-3, 1.0)
@@ -244,7 +248,9 @@ class DepthNormalizer:
         """
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        Image.fromarray((image_float * 255.0).clip(0, 255).astype(np.uint8), mode="RGB").save(path)
+        Image.fromarray(
+            (image_float * 255.0).clip(0, 255).astype(np.uint8), mode="RGB"
+        ).save(path)
         return path
 
     def run_file(self, input_path: Path, output_path: Path) -> Path:
@@ -301,8 +307,6 @@ class DepthNormalizer:
             else out_path.with_name(f"{out_path.stem}_input{out_path.suffix}")
         )
 
-
-
         # 1. 元画像の保存
         in_save_path.parent.mkdir(parents=True, exist_ok=True)
         Image.fromarray(rgb, mode="RGB").save(in_save_path)
@@ -316,14 +320,18 @@ class DepthNormalizer:
         saved_out_path = self.save(normal_map, out_path)
 
         # 4. 擬似シェーディング画像の生成と保存
-        light_dirs: list[tuple[float, float, float]] = [(-1.0, -1.0, 1.0),
-                                                        (1.0, -1.0, 1.0),
-                                                        (-1.0, 1.0, 1.0),
-                                                        (1.0, 1.0, 1.0)]
-        
-        saved_shade_paths=[]    
+        light_dirs: list[tuple[float, float, float]] = [
+            (-1.0, -1.0, 1.0),
+            (1.0, -1.0, 1.0),
+            (-1.0, 1.0, 1.0),
+            (1.0, 1.0, 1.0),
+        ]
+
+        saved_shade_paths = []
         for i, light_dir in enumerate(light_dirs):
-            shaded_rgb = self.apply_pseudo_shading(rgb, normals, light_dir=light_dir, strength=strength)
+            shaded_rgb = self.apply_pseudo_shading(
+                rgb, normals, light_dir=light_dir, strength=strength
+            )
             shade_save_path = (
                 Path(shaded_save_path)
                 if shaded_save_path is not None
@@ -338,15 +346,32 @@ class DepthNormalizer:
 
 def main() -> None:
     """コマンドライン引数を解析し、法線マップ生成処理を実行するエントリーポイント."""
-    parser = argparse.ArgumentParser(description="Estimate a depth map and visualize it as a normal-map image.")
-    parser.add_argument(
-        "input", type=Path, nargs="?", default=None, help="Input image path (optional when --demo is used)."
+    parser = argparse.ArgumentParser(
+        description="Estimate a depth map and visualize it as a normal-map image."
     )
-    parser.add_argument("-o", "--output", type=Path, default=Path("normal_map.png"), help="Output PNG path.")
     parser.add_argument(
-        "--model", type=str, default=None, help="Optional DepthAnything model name to prefer when available."
+        "input",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="Input image path (optional when --demo is used).",
     )
-    parser.add_argument("--device", default="cpu", help="Device to run the model on, e.g. cpu or cuda.")
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=Path("normal_map.png"),
+        help="Output PNG path.",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Optional DepthAnything model name to prefer when available.",
+    )
+    parser.add_argument(
+        "--device", default="cpu", help="Device to run the model on, e.g. cpu or cuda."
+    )
     parser.add_argument(
         "--demo",
         action="store_true",
@@ -355,7 +380,9 @@ def main() -> None:
     args = parser.parse_args()
 
     if not args.demo and args.input is None:
-        parser.error("the following arguments are required: input (unless --demo is specified)")
+        parser.error(
+            "the following arguments are required: input (unless --demo is specified)"
+        )
 
     config = NormalMapConfig(
         slope_scale=8.0,
