@@ -249,13 +249,14 @@ class DepthNormalizer:
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         Image.fromarray(
-            (image_float * 255.0).clip(0, 255).astype(np.uint8), mode="RGB"
+            (image_float * 255.0).clip(0, 255).astype(np.uint8)
         ).save(path)
         return path
 
     def run_file(self, input_path: Path, output_path: Path) -> Path:
         """画像ファイルを読み込み、法線マップを生成してファイルに保存する.
 
+        
         Args:
             input_path: 入力画像のファイルパス。
             output_path: 出力する法線マップ画像のファイルパス。
@@ -289,17 +290,10 @@ class DepthNormalizer:
         Returns:
             (保存された元画像の Path, 保存された法線マップの Path, 保存されたシェーディング画像の Path) のタプル。
 
-        Raises:
-            ImportError: scikit-image がインストールされていない場合。
         """
-        try:
-            from skimage import data
-        except ImportError as exc:
-            raise ImportError(
-                "scikit-image is required for --demo mode. Install it via `pip install scikit-image`."
-            ) from exc
-
-        rgb = np.asarray(data.coffee(), dtype=np.uint8)
+        coffee_path = Path("figures/coffee.png")
+        image = Image.open(coffee_path).convert("RGB")
+        rgb = np.asarray(image, dtype=np.uint8)
         out_path = Path(output_path)
         in_save_path = (
             Path(input_save_path)
@@ -309,7 +303,7 @@ class DepthNormalizer:
 
         # 1. 元画像の保存
         in_save_path.parent.mkdir(parents=True, exist_ok=True)
-        Image.fromarray(rgb, mode="RGB").save(in_save_path)
+        Image.fromarray(rgb).save(in_save_path)
 
         # 2. 深度推定と単位法線ベクトルの計算
         depth = self.estimate_depth_map(rgb)
@@ -375,7 +369,7 @@ def main() -> None:
     parser.add_argument(
         "--demo",
         action="store_true",
-        help="Run demo using skimage.data.coffee() and save input, normal map, and shaded images.",
+        help="Run demo using coffee image and save input, normal map, and shaded images.",
     )
     args = parser.parse_args()
 
