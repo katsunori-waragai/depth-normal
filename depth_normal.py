@@ -90,9 +90,9 @@ class DepthNormalizer:
                 mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
             )
             self._prepare_for_net = PrepareForNet()
-            model = DepthAnythingV2(device=self.config._device)
+            model = DepthAnythingV2(device=self._device)
             if hasattr(model, "to"):
-                model = model.to(self.config._device)
+                model = model.to(self._device)
             if hasattr(model, "eval"):
                 model.eval()
             self._model = model
@@ -129,7 +129,7 @@ class DepthNormalizer:
             image_tensor = self._transform(image_tensor)
 
             with torch.inference_mode():
-                input_tensor = image_tensor.unsqueeze(0).to(self.config.device)
+                input_tensor = image_tensor.unsqueeze(0).to(self._device)
                 depth = self._model(input_tensor)[0]
             depth = depth.detach().cpu().numpy()[0]
             depth = np.asarray(depth, dtype=np.float32)
