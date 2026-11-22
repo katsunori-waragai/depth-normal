@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+import warnings
 
 import cv2
 import numpy as np
@@ -55,6 +56,7 @@ class DepthNormalizer:
     _model: Any = field(default=None, init=False, repr=False)
     _transform: Any = field(default=None, init=False, repr=False)
     _prepare_for_net: Any = field(default=None, init=False, repr=False)
+    _device: str = field(default="cpu", init=False, repr=False)
 
     def __post_init__(self) -> None:
         """初期化後に推論モデルと前処理パイプラインをロードする.
@@ -62,9 +64,24 @@ class DepthNormalizer:
         ライブラリが未インストールの場合やロードに失敗した場合は、
         内部状態を None のまま維持し、推論時にグレースケールフォールバックを使用します。
         """
+
         try:
             if torch is None:
                 raise RuntimeError("PyTorch is not installed")
+
+            device = torch.device(self.config.device)
+            if device.type == "cuda":
+                if not torch.cuda.is_available():
+                    warnings.warn("CUDA is not available. Falling back to CPU.", RuntimeWarning)
+                    device = torch.device("cpu")
+                elif device.index is not None and device.index >= torch.cuda.device_count():
+                    warnings.warn(
+                        f"CUDA device {device.index} is out of range. Falling back to CPU.",
+                        RuntimeWarning,
+                    )
+                    device = torch.device("cpu")
+
+            self._device = str(device)
 
             from depth_anything_v2.dpt import DepthAnythingV2
             from depth_anything_v2.util.transform import NormalizeImage, PrepareForNet
@@ -73,8 +90,9 @@ class DepthNormalizer:
                 mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
             )
             self._prepare_for_net = PrepareForNet()
-
-            model = DepthAnythingV2(device=self.config.device)
+            model = DepthAnythingV2(device=self._device)
+            if hasattr(model, "to"):
+                model = model.to(self._device)
             if hasattr(model, "eval"):
                 model.eval()
             self._model = model
@@ -110,8 +128,9 @@ class DepthNormalizer:
             image_tensor = self._prepare_for_net(image)
             image_tensor = self._transform(image_tensor)
 
-            with torch.no_grad():
-                depth = self._model(image_tensor.unsqueeze(0))[0]
+            with torch.inference_mode():
+                input_tensor = image_tensor.unsqueeze(0).to(self._device)
+                depth = self._model(input_tensor)[0]
             depth = depth.detach().cpu().numpy()[0]
             depth = np.asarray(depth, dtype=np.float32)
             # Convert depth from the model representation into a normalized height map.
