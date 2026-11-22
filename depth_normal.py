@@ -142,7 +142,7 @@ class DepthNormalizer:
             # Convert depth from the model representation into a normalized height map.
             depth = (depth - np.min(depth)) / max(np.ptp(depth), 1e-6)
             return depth
-        except Exception:
+        except Exception as exc:
             warnings.warn(
                 f"Depth estimation inference failed ({type(exc).__name__}: {exc}). "
                 "Falling back to grayscale depth estimation.",
