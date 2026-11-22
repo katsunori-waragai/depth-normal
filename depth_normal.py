@@ -96,7 +96,13 @@ class DepthNormalizer:
             if hasattr(model, "eval"):
                 model.eval()
             self._model = model
-        except Exception:
+        except Exception as exc:
+            warnings.warn(
+                f"Failed to initialize DepthAnythingV2 ({type(exc).__name__}: {exc}). "
+                "Falling back to grayscale depth estimation.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
             self._model = None
             self._transform = None
             self._prepare_for_net = None
@@ -137,6 +143,12 @@ class DepthNormalizer:
             depth = (depth - np.min(depth)) / max(np.ptp(depth), 1e-6)
             return depth
         except Exception:
+            warnings.warn(
+                f"Depth estimation inference failed ({type(exc).__name__}: {exc}). "
+                "Falling back to grayscale depth estimation.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
             return self._estimate_depth_fallback(image_rgb)
 
     def _estimate_depth_fallback(self, image_rgb: np.ndarray) -> np.ndarray:
