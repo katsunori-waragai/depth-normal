@@ -159,7 +159,7 @@ class DepthNormalizer:
 
         try:
             # 引数は RGB 配列として扱う。BGR/RGB の色変換は行わない。
-            image = Image.fromarray(image_rgb[:, :, :3], mode="RGB")
+            image = Image.fromarray(image_rgb[:, :, :3])
 
             result = self._model(image)
 
