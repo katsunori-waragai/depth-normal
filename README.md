@@ -27,7 +27,8 @@ https://github.com/DepthAnything/Depth-Anything-V2
 
 ### 動作環境
 - Ubuntu
-- python >= 3.8
+- python >= 3.9
+- [uv](https://github.com/astral-sh/uv) パッケージマネージャー
 - CPU
 
 ### スクリプト
@@ -40,13 +41,21 @@ https://github.com/DepthAnything/Depth-Anything-V2
 ### 依存関係のインストール
 
 ```bash
-python3 -m pip install -r requirements.txt
+uv sync
+```
+
+`uv` を使用して依存関係をインストールし、仮想環境を自動的に作成します。
+
+`uv` がインストールされていない場合は、以下のコマンドでインストールできます：
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 ### 実行方法
 
 ```bash
-python3 depth_normal.py input.jpg -o normal_map.png
+uv run python depth_normal.py input.jpg -o normal_map.png
 ```
 
 - `input.jpg` : 入力画像
@@ -63,8 +72,8 @@ Depth-Anything-V2 がインストール済みの場合は、その推論を優�
 
 ### 疑似シェーディングの実装
 
-``` 
-python3 depth_normal.py --demo
+```bash
+uv run python depth_normal.py --demo
 ```
 
 ### 擬似シェーディングの実装（デモモード）
@@ -74,16 +83,14 @@ python3 depth_normal.py --demo
 #### 実行方法
 
 ```bash
-python3 depth_normal.py --demo
+uv run python depth_normal.py --demo
 ```
 
 出力先のファイル名を指定する場合は `-o` オプションを使用します（デフォルトは `normal_map.png`）。
 
 ```bash
-python3 depth_normal.py --demo -o output/result.png
+uv run python depth_normal.py --demo -o output/result.png
 ```
-
-※ `--demo` モードの実行には `scikit-image` が必要です（`pip install scikit-image`）。
 
 #### 出力されるファイル
 
