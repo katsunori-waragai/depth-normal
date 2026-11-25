@@ -27,7 +27,8 @@ https://github.com/DepthAnything/Depth-Anything-V2
 
 ### 動作環境
 - Ubuntu
-- python >= 3.8
+- python >= 3.9
+- [uv](https://github.com/astral-sh/uv) パッケージマネージャー
 - CPU
 
 ### スクリプト
@@ -40,13 +41,21 @@ https://github.com/DepthAnything/Depth-Anything-V2
 ### 依存関係のインストール
 
 ```bash
-python3 -m pip install -r requirements.txt
+uv sync
+```
+
+`uv` を使用して依存関係をインストールし、仮想環境を自動的に作成します。
+
+`uv` がインストールされていない場合は、以下のコマンドでインストールできます：
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 ### 実行方法
 
 ```bash
-python3 depth_normal.py input.jpg -o normal_map.png
+uv run python depth_normal.py input.jpg -o normal_map.png
 ```
 
 - `input.jpg` : 入力画像
@@ -63,8 +72,8 @@ Depth-Anything-V2 がインストール済みの場合は、その推論を優�
 
 ### 疑似シェーディングの実装
 
-``` 
-python3 depth_normal.py --demo
+```bash
+uv run python depth_normal.py --demo
 ```
 
 ### 擬似シェーディングの実装（デモモード）
@@ -74,16 +83,14 @@ python3 depth_normal.py --demo
 #### 実行方法
 
 ```bash
-python3 depth_normal.py --demo
+uv run python depth_normal.py --demo
 ```
 
 出力先のファイル名を指定する場合は `-o` オプションを使用します（デフォルトは `normal_map.png`）。
 
 ```bash
-python3 depth_normal.py --demo -o output/result.png
+uv run python depth_normal.py --demo -o output/result.png
 ```
-
-※ `--demo` モードの実行には `scikit-image` が必要です（`pip install scikit-image`）。
 
 #### 出力されるファイル
 
@@ -104,16 +111,15 @@ python3 depth_normal.py --demo -o output/result.png
 
 <img src="figures/normal_map_shaded_3.png" width=480>
 
-* **`normal_map_shaded.png`**: 法線ベクトルと仮想光源に基づき擬似シェーディングを適用した画像
+* **`normal_map_shaded.png`**: 法線ベクトルと仮想光源に基づき擬似シェーディングを適用した画像 
 
-
-効果：
+## 効果：
 異なるシェーディングの画像を見比べてください。
-- コーヒーカップの縁
+-  コーヒーカップの縁
 - テーブルの木目の様子
 それらが微妙に違ってきているはずです。
 
-#### 処理の仕組み
+## 仕組み
 
 1. **コサイン（内積）の計算**: 各ピクセルの単位法線ベクトル $\mathbf{N}$ と、想定する平行光源の方向ベクトル $\mathbf{L}$（デフォルトは左上・手前方向 `(-1.0, -1.0, 1.0)`）の内積 $\cos\theta = \mathbf{N} \cdot \mathbf{L}$ を算出します。
 2. **輝度（V）の変調**: 元画像を HSV 色空間に変換し、色相（H）と彩度（S）を維持したまま、明度（V）に対して以下の係数を掛け合わせます。
